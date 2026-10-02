@@ -1,0 +1,7 @@
+{
+  "base_url": "http://host.openshell.internal:8787",
+  "auth_mode": "token_file",
+  "token_file": "/sandbox/.hermes/reachy-bridge-token",
+  "timeout": 10
+}
+

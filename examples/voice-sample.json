@@ -1,0 +1,8 @@
+{
+  "event_id": "voice-sample-kokoro-bella-1",
+  "severity": "healthy",
+  "summary": "Hi! I'm Reachy, your infrastructure buddy! I'm ready to share your cluster updates, celebrate recoveries, and give you a heads up when something needs attention!",
+  "source": "voice-preview",
+  "speak": true,
+  "gesture": true
+}

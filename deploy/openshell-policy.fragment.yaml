@@ -1,0 +1,22 @@
+# MERGE this network_policies entry into your exported base policy.
+# Do not replace the complete OpenShell policy with this fragment.
+# Replace 172.18.0.1/32 with the host address resolved INSIDE YOUR sandbox.
+network_policies:
+  reachy_output:
+    endpoints:
+      - host: host.openshell.internal
+        port: 8787
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - 172.18.0.1/32
+        rules:
+          - allow: {method: GET, path: /healthz}
+          - allow: {method: GET, path: /v1/status}
+          - allow: {method: GET, path: /v1/events/*}
+          - allow: {method: POST, path: /v1/events}
+          - allow: {method: POST, path: /v1/stop}
+    binaries:
+      - path: /opt/hermes/.venv/bin/python
+      - path: /opt/hermes/.venv/bin/python3
+      - path: /usr/bin/python3*

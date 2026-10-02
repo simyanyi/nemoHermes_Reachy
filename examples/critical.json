@@ -1,0 +1,9 @@
+{
+  "event_id": "demo-checkout-critical-1",
+  "severity": "critical",
+  "summary": "Demo scenario: checkout errors have increased and two pods are restarting. Please inspect the latest deployment and application logs. No remediation has been performed.",
+  "source": "synthetic-demo/checkout",
+  "speak": true,
+  "gesture": true
+}
+

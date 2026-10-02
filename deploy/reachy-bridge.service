@@ -1,0 +1,19 @@
+[Unit]
+Description=NemoHermes wireless Reachy output bridge
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/admin/Documents/nemoHermes_Reachy
+ExecStart=/home/admin/Documents/nemoHermes_Reachy/.venv/bin/reachy-bridge serve
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target
+

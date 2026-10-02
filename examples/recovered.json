@@ -1,0 +1,9 @@
+{
+  "event_id": "demo-checkout-healthy-2",
+  "severity": "healthy",
+  "summary": "Demo scenario: checkout pods are ready and error rates are back below the alert threshold. Continue monitoring before closing the incident.",
+  "source": "synthetic-demo/checkout",
+  "speak": true,
+  "gesture": true
+}
+

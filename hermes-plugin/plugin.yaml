@@ -1,0 +1,9 @@
+name: reachy-output
+version: "0.1.0"
+description: "Report infrastructure health through a wireless Reachy via the host bridge"
+provides_tools:
+  - reachy_status
+  - reachy_report
+  - reachy_event_status
+  - reachy_stop
+

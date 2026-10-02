@@ -1,0 +1,17 @@
+services:
+  reachy-tts:
+    image: text-to-speech:latest
+    pull_policy: never
+    container_name: nemohermes-reachy-tts
+    restart: unless-stopped
+    entrypoint: ["/app/.venv/bin/python", "/app/reachy_kokoro_server.py"]
+    ports:
+      - "127.0.0.1:8880:8880"
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./kokoro_server.py:/app/reachy_kokoro_server.py:ro
+    cpus: 2
+    mem_limit: 2g

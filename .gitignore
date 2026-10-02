@@ -1,4 +1,7 @@
 # Byte-compiled / optimized / DLL files
+.secrets/
+current-policy.yaml
+reachy-policy.yaml
 __pycache__/
 *.py[codz]
 *$py.class
