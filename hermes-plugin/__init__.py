@@ -1,10 +1,100 @@
 """Hermes-native tools. Standard library only; robot credentials stay on the host."""
 
 import json
+import hashlib
+import logging
+import re
+import threading
+import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+
+logger = logging.getLogger(__name__)
+_audio_turns = set()
+_audio_turns_lock = threading.Lock()
+
+
+def _recent_audio_matches(user_message):
+    """Match Hermes's quoted STT result to the newly cached Telegram clip."""
+    if not isinstance(user_message, str) or not (
+        user_message.startswith('"') and user_message.endswith('"')
+    ):
+        return False
+    transcript = user_message[1:-1]
+    if not transcript.strip():
+        return False
+    cache = Path('/sandbox/.hermes/cache/audio')
+    try:
+        clips = sorted(
+            (p for p in cache.iterdir() if p.suffix in {'.ogg', '.mp3'}
+             and time.time() - p.stat().st_mtime < 90),
+            key=lambda p: p.stat().st_mtime, reverse=True,
+        )[:3]
+    except OSError:
+        return False
+    try:
+        from tools.transcription_tools import transcribe_audio
+        for clip in clips:
+            result = transcribe_audio(str(clip), None, 'gateway')
+            if result.get('success') and result.get('transcript', '').strip() == transcript:
+                return True
+    except Exception:
+        logger.exception('Telegram audio match failed')
+    return False
+
+
+def _pre_llm_call(*, session_id='', platform='', user_message='', **kwargs):
+    if platform != 'telegram' or not session_id:
+        return None
+    if _recent_audio_matches(user_message):
+        with _audio_turns_lock:
+            _audio_turns.add(session_id)
+        return {'context': 'This Telegram message came from an audio clip. Answer its request. Your final answer will be sent as text and spoken by Reachy automatically.'}
+    return None
+
+
+def _speech_chunks(answer):
+    """Split text at words while respecting the bridge's 600-char limit."""
+    remaining = re.sub(r'\s+', ' ', answer).strip()
+    while remaining:
+        if len(remaining) <= 560:
+            yield remaining
+            return
+        split = remaining.rfind(' ', 0, 561)
+        if split < 200:
+            split = 560
+        yield remaining[:split].strip()
+        remaining = remaining[split:].strip()
+
+
+def _speak_audio_reply(*, response_text='', session_id='', platform='', **kwargs):
+    if platform != 'telegram' or not session_id:
+        return None
+    with _audio_turns_lock:
+        if session_id not in _audio_turns:
+            return None
+        _audio_turns.remove(session_id)
+    chunks = list(_speech_chunks(response_text))
+    if not chunks:
+        return None
+    for index, chunk in enumerate(chunks):
+        digest = hashlib.sha256(f'{session_id}:{response_text}:{index}'.encode()).hexdigest()[:24]
+        result = json.loads(report({
+            'event_id': 'telegram-audio-' + digest,
+            'severity': 'healthy',
+            'source': 'telegram-reachy-audio',
+            'summary': chunk,
+            'speak': True,
+            'gesture': index == 0,
+        }))
+        if result.get('error') or result.get('state') not in {'queued', 'running', 'completed'}:
+            logger.warning('Reachy rejected Telegram audio reply chunk %s', index)
+            return response_text + '\n\nReachy could not speak this reply.'
+    logger.info('Queued %s Reachy speech chunk(s) for Telegram audio reply', len(chunks))
+    return None
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -105,17 +195,18 @@ TOOLS = [
     (
         schema(
             "reachy_status",
-            "Read robot/backend readiness and bridge queue. Does not move the robot.",
+            "Read robot/backend readiness, bridge queue, and current Kubernetes or Docker "
+            "telemetry statuses and failure findings. Does not move the robot.",
         ),
         status,
     ),
     (
         schema(
             "reachy_report",
-            "Queue a short spoken infrastructure report and a fixed severity gesture. "
-            "Use observed telemetry; never invent data or claim remediation. Use the SAME event_id "
-            "and payload for retries, a NEW ID for a changed incident state. A queued response is not "
-            "delivery: check reachy_event_status. A simulated result means no hardware output.",
+            "Queue Reachy speech and a small gesture. For source reachy-voice-start, an accepted "
+            "call activates listening immediately; do not check telemetry or poll event status. "
+            "For infrastructure reports, use observed telemetry and check reachy_event_status "
+            "before claiming delivery. Use the SAME event_id and payload for retries.",
             {
                 "event_id": {
                     "type": "string",
@@ -135,7 +226,7 @@ TOOLS = [
                 "source": {
                     "type": "string",
                     "maxLength": 120,
-                    "description": "Telemetry source/cluster/namespace, not a credential",
+                    "description": "Event source, such as reachy-voice-start or reachy-telemetry/kubernetes",
                 },
                 "speak": {"type": "boolean", "default": True},
                 "gesture": {"type": "boolean", "default": True},
@@ -166,6 +257,8 @@ TOOLS = [
 
 
 def register(ctx):
+    ctx.register_hook('pre_llm_call', _pre_llm_call)
+    ctx.register_hook('transform_llm_output', _speak_audio_reply)
     for definition, handler in TOOLS:
         ctx.register_tool(
             name=definition["name"],

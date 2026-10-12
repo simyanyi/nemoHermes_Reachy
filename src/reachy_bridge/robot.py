@@ -2,13 +2,14 @@
 
 import asyncio
 import math
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
 
 from .config import Settings
 from .models import Alert
-from .tts import Speech
+from .tts import Speech, wav_duration
 
 # Small, fixed poses: (roll degrees, pitch degrees, yaw degrees, antenna degrees).
 # Return to neutral after each expression. No arbitrary agent-controlled joint targets.
@@ -19,6 +20,27 @@ POSES = {
     "recovering": [(0, -6, 0, 15)],
     "unknown": [(-8, 0, 0, 10)],
 }
+# Small nods and antenna wiggles for automatic telemetry announcements.
+TELEMETRY_POSES = {
+    "healthy": [(-4, -5, 0, 10), (4, 4, 0, -10)],
+    "warning": [(5, 3, -3, 9)],
+    "critical": [(7, 5, -4, 12)],
+    "recovering": [(0, -5, 0, 9), (0, 3, 0, -9)],
+    "unknown": [(-6, 2, 4, 7)],
+}
+# Gentle movement loops used while Reachy speaks. The small alternating yaw,
+# roll, and antenna changes read as curious and friendly without looking like
+# an alarm gesture.
+SPEECH_POSES = [
+    (0, -4, 4, 8),
+    (3, 1, -3, -6),
+    (-3, 2, 1, 5),
+]
+TELEMETRY_SPEECH_POSES = [
+    (0, -3, 2, 6),
+    (3, 1, -2, -5),
+    (-2, 1, 1, 4),
+]
 REQUIRED = {
     "/api/daemon/status": "get",
     "/api/move/goto": "post",
@@ -115,24 +137,34 @@ class Robot:
         return result
 
     async def pose(self, roll=0, pitch=0, yaw=0, antenna=0):
-        result = await self.request(
-            "POST",
-            "/api/move/goto",
-            json={
-                "head_pose": {
-                    "roll": math.radians(roll),
-                    "pitch": math.radians(pitch),
-                    "yaw": math.radians(yaw),
+        try:
+            result = await self.request(
+                "POST",
+                "/api/move/goto",
+                json={
+                    "head_pose": {
+                        "roll": math.radians(roll),
+                        "pitch": math.radians(pitch),
+                        "yaw": math.radians(yaw),
+                    },
+                    "antennas": [math.radians(antenna), math.radians(-antenna)],
+                    "duration": 0.45,
+                    "interpolation": "minjerk",
                 },
-                "antennas": [math.radians(antenna), math.radians(-antenna)],
-                "duration": 0.65,
-                "interpolation": "minjerk",
-            },
-        )
-        self.move_id = result["uuid"]
-        # The daemon returns a task ID, not a completion acknowledgement.
-        await asyncio.sleep(0.8)
-        self.move_id = None
+            )
+            self.move_id = result["uuid"]
+            # The daemon returns a task ID, not a completion acknowledgement.
+            await asyncio.sleep(0.55)
+        finally:
+            self.move_id = None
+
+    async def speak_gesture(self, *, telemetry: bool):
+        """Cycle a friendly expression until speech playback is cancelled."""
+        poses = TELEMETRY_SPEECH_POSES if telemetry else SPEECH_POSES
+        index = 0
+        while True:
+            await self.pose(*poses[index])
+            index = (index + 1) % len(poses)
 
     async def perform(self, alert: Alert):
         if self.settings.dry_run:
@@ -142,17 +174,32 @@ class Robot:
                 "speech_requested": alert.speak,
                 "gesture_requested": alert.gesture,
             }
-        status = await self.status()
+        # Readiness checks and speech synthesis are independent. Start them
+        # together so the robot does not wait on its LAN health requests before
+        # generating the reply audio.
+        status_task = asyncio.create_task(self.status())
+        audio = None
+        try:
+            if alert.speak:
+                cached = self.settings.voice_start_audio_file
+                if (alert.source == "reachy-voice-start" and alert.summary == "Hi! I'm listening."
+                        and cached and cached.is_file()):
+                    content = Path(cached).read_bytes()
+                    audio = (content, wav_duration(content))
+                else:
+                    audio = await self.speech.render(alert.summary)
+        finally:
+            status = await status_task
         if not status["ready"]:
             raise RuntimeError("Robot backend is not ready; enable/wake it in the Reachy dashboard")
-        if alert.gesture and status.get("motor_mode") != "enabled":
+        telemetry = alert.source.startswith("reachy-telemetry/")
+        do_gesture = alert.gesture and status.get("motor_mode") == "enabled"
+        if alert.gesture and not do_gesture and not telemetry:
             raise RuntimeError(
                 "Robot motors are not enabled; enable/wake them in the Reachy dashboard"
             )
         if alert.speak and not status.get("media_available"):
             raise RuntimeError("Robot media is unavailable; enable media in the Reachy dashboard")
-        # Synthesize first, so failed speech generation does not cause a partial gesture.
-        audio = await self.speech.render(alert.summary) if alert.speak else None
         filename = "nemohermes-" + uuid4().hex + ".wav"
         uploaded = False
         try:
@@ -163,19 +210,42 @@ class Robot:
                     "/api/media/sounds/upload",
                     files={"file": (filename, audio[0], "audio/wav")},
                 )
-            if alert.gesture:
-                for roll, pitch, yaw, antenna in POSES[alert.severity]:
+            speech_gesture = do_gesture and bool(audio)
+            if do_gesture and telemetry and speech_gesture:
+                roll, pitch, yaw, antenna = TELEMETRY_POSES[alert.severity][0]
+                await self.pose(roll, pitch, yaw, antenna)
+            elif do_gesture and not speech_gesture:
+                poses = TELEMETRY_POSES if telemetry else POSES
+                for roll, pitch, yaw, antenna in poses[alert.severity]:
                     await self.pose(roll, pitch, yaw, antenna)
                 await self.pose()
             if audio:
                 # Set before awaiting: cancellation may race the remote acknowledgement.
                 self.sound_active = True
                 await self.request("POST", "/api/media/play_sound", json={"file": filename})
-                await asyncio.sleep(audio[1] + 0.5)
+                gesture_task = None
+                if speech_gesture:
+                    if telemetry:
+                        first_pose = TELEMETRY_SPEECH_POSES[0]
+                    elif alert.source in {"reachy-voice", "reachy-voice-start"}:
+                        first_pose = SPEECH_POSES[0]
+                    else:
+                        first_pose = POSES[alert.severity][0]
+                    await self.pose(*first_pose)
+                    gesture_task = asyncio.create_task(self.speak_gesture(telemetry=telemetry))
+                try:
+                    await asyncio.sleep(audio[1] + 0.15)
+                finally:
+                    if gesture_task:
+                        gesture_task.cancel()
+                        await asyncio.gather(gesture_task, return_exceptions=True)
+                    if speech_gesture:
+                        await self.pose()
                 self.sound_active = False
             return {
                 "delivery": "daemon_accepted",
                 "gesture_requested": alert.gesture,
+                "gesture_performed": do_gesture,
                 "speech_requested": alert.speak,
                 "note": "Daemon accepted commands; physical motion/audio is not sensor-verified",
             }

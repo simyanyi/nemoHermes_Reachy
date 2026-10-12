@@ -13,5 +13,5 @@ services:
       PYTHONUNBUFFERED: "1"
     volumes:
       - ./kokoro_server.py:/app/reachy_kokoro_server.py:ro
-    cpus: 2
+    cpus: 6
     mem_limit: 2g

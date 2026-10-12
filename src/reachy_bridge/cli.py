@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import ipaddress
 import json
+import logging
 import os
 import secrets
 from pathlib import Path
@@ -71,6 +72,21 @@ def main():
     sub.add_parser("init", help="Create a dedicated local bridge token (never overwrites one)")
     serve = sub.add_parser("serve", help="Start one bridge worker; does not enable robot motors")
     serve.add_argument("--dry-run", action="store_true")
+    monitor = sub.add_parser("monitor", help="Check Docker or Kubernetes every 10s and report changes")
+    monitor.add_argument("--config", type=Path, help="YAML file selecting the telemetry source and target")
+    monitor.add_argument("--source", choices=["docker", "kubernetes"], default="docker")
+    monitor.add_argument("--kubeconfig", type=Path)
+    monitor.add_argument("--kubectl", default="kubectl")
+    monitor.add_argument("--namespace", help="Namespace of a deployment to report")
+    monitor.add_argument("--deployment", help="Deployment whose ready replicas are reported")
+    monitor.add_argument("--telegram-target", default="")
+    monitor.add_argument("--speak-every-check", action="store_true",
+                         help="Send a spoken status on every polling cycle")
+    monitor.add_argument("--announce-initial", action="store_true",
+                         help="Speak the first observed status, including a healthy status")
+    voice = sub.add_parser("voice", help="Listen on Reachy microphone and converse through Hermes")
+    voice.add_argument("--model-path", required=True, help="Local faster-whisper model path")
+    voice.add_argument("--wake-word", default="hey reachy")
     sub.add_parser("preflight", help="Read robot readiness and firmware API; no motion or audio")
     policy = sub.add_parser("policy", help="Print policy fragment, or merge into an exported base")
     policy.add_argument("--host", default="host.openshell.internal")
@@ -116,6 +132,51 @@ def main():
         )
     elif args.command == "preflight":
         raise SystemExit(asyncio.run(preflight(settings)))
+    elif args.command == "monitor":
+        from .monitor import (
+            DockerSource,
+            KubernetesSource,
+            MonitorConfig,
+            Reporter,
+            Watchdog,
+            load_monitor_config,
+        )
+
+        logging.basicConfig(level=logging.INFO)
+        if args.config:
+            try:
+                config = load_monitor_config(args.config)
+            except (OSError, ValueError, yaml.YAMLError) as exc:
+                parser.error(f"Invalid telemetry config: {exc}")
+        else:
+            try:
+                config = MonitorConfig(
+                    source=args.source, kubeconfig=args.kubeconfig, kubectl=args.kubectl,
+                    namespace=args.namespace, deployment=args.deployment,
+                    telegram_target=args.telegram_target,
+                    speak_every_check=args.speak_every_check,
+                    announce_initial=args.announce_initial, gestures=False,
+                )
+            except ValueError as exc:
+                parser.error(str(exc))
+        if config.source == "kubernetes":
+            source = KubernetesSource(config.kubeconfig, config.kubectl,
+                                      namespace=config.namespace, deployment=config.deployment)
+        else:
+            source = DockerSource()
+        reporter = Reporter(settings, config.telegram_target,
+                            source=f"reachy-telemetry/{config.source}",
+                            gestures=config.gestures)
+        asyncio.run(Watchdog(source, reporter, interval=config.interval_seconds,
+                             label=config.label or config.source.title(),
+                             speak_every_check=config.speak_every_check,
+                             announce_initial=config.announce_initial).run())
+    elif args.command == "voice":
+        from .voice import VoiceLoop
+
+        logging.basicConfig(level=logging.INFO)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        asyncio.run(VoiceLoop(settings, args.model_path, args.wake_word).run())
     elif args.command == "policy":
         fragment = policy_fragment(args.host, args.allowed_ip)
         if args.base:

@@ -83,13 +83,18 @@ class Speech:
                         if len(chunks) > 20 * 1024 * 1024:
                             raise RuntimeError("Speech response exceeds 20 MiB")
                     audio = bytes(chunks)
-        # Require real PCM WAV; never upload arbitrary provider response bodies.
-        with wave.open(io.BytesIO(audio), "rb") as wav:
-            duration = wav.getnframes() / wav.getframerate()
-            if not 0 < duration <= 60 or wav.getcomptype() != "NONE":
-                raise RuntimeError("Speech must be PCM WAV lasting at most 60 seconds")
-            if len(wav.readframes(wav.getnframes())) != (
-                wav.getnframes() * wav.getnchannels() * wav.getsampwidth()
-            ):
-                raise RuntimeError("Speech WAV is truncated")
-        return audio, duration
+        return audio, wav_duration(audio)
+
+
+def wav_duration(audio: bytes) -> float:
+    """Validate PCM WAV and return playback length."""
+    # Require real PCM WAV; never upload arbitrary provider response bodies.
+    with wave.open(io.BytesIO(audio), "rb") as wav:
+        duration = wav.getnframes() / wav.getframerate()
+        if not 0 < duration <= 60 or wav.getcomptype() != "NONE":
+            raise RuntimeError("Speech must be PCM WAV lasting at most 60 seconds")
+        if len(wav.readframes(wav.getnframes())) != (
+            wav.getnframes() * wav.getnchannels() * wav.getsampwidth()
+        ):
+            raise RuntimeError("Speech WAV is truncated")
+    return duration

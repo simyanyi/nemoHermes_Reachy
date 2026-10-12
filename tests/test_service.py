@@ -148,3 +148,20 @@ async def test_stale_queued_alert_expires(settings):
         await asyncio.wait_for(engine.queue.join(), 1)
     assert event.state == "expired"
     assert robot.calls == []
+
+
+async def test_voice_activation_keeps_independent_bridge_state(settings):
+    app = create_app(settings, FakeRobot())
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test",
+            headers={"Authorization": "Bearer " + settings.token()},
+        ) as c:
+            assert (await c.get("/v1/voice")).json()["active"] is False
+            start = alert("voice-start-1", source="reachy-voice-start")
+            assert (await c.post("/v1/events", json=start)).status_code == 202
+            assert (await c.get("/v1/voice")).json()["active"] is True
+            await asyncio.wait_for(app.state.engine.queue.join(), 1)
+            stop = alert("voice-stop-1", source="reachy-voice-stop")
+            assert (await c.post("/v1/events", json=stop)).status_code == 202
+            assert (await c.get("/v1/voice")).json()["active"] is False

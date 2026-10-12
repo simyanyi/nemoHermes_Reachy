@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     bind: str = "127.0.0.1"
     port: int = Field(default=8787, ge=1024, le=65535)
     token_file: Path = Path(".secrets/bridge-token")
+    telemetry_config_file: Path | None = None
+    kubeconfig: Path | None = None
+    telemetry_namespace: str | None = None
+    telemetry_deployment: str | None = None
     dry_run: bool = False
     queue_size: int = Field(default=8, ge=1, le=32)
     history_size: int = Field(default=256, ge=32, le=4096)
@@ -27,6 +31,7 @@ class Settings(BaseSettings):
     tts_model: str = "kokoro"
     tts_voice: str = "af_heart"
     tts_key_file: Path | None = None
+    voice_start_audio_file: Path | None = None
 
     @field_validator("robot_url", "tts_base_url")
     @classmethod

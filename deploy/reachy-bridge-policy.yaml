@@ -1,0 +1,20 @@
+preset:
+  name: reachy-bridge-local
+  description: Allow the Hermes Reachy tools to call the local authenticated bridge.
+network_policies:
+  reachy_bridge_local:
+    name: reachy_bridge_local
+    endpoints:
+      - host: host.openshell.internal
+        port: 8787
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - 172.18.0.1/32
+        rules:
+          - allow: { method: GET, path: "/v1/status" }
+          - allow: { method: GET, path: "/v1/events/*" }
+          - allow: { method: POST, path: "/v1/events" }
+          - allow: { method: POST, path: "/v1/stop" }
+    binaries:
+      - { path: /usr/bin/python3.13 }

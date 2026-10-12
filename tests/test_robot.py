@@ -80,6 +80,91 @@ async def test_report_converts_degrees_uploads_plays_and_cleans_only_own_audio(m
     await robot.close()
 
 
+@pytest.mark.parametrize("source", ["reachy-voice", "reachy-voice-start"])
+async def test_voice_uses_small_gesture_during_playback(monkeypatch, source):
+    import json
+
+    calls = []
+
+    def handle(req):
+        calls.append(req)
+        return daemon_request(req)
+
+    async def no_wait(_):
+        pass
+
+    monkeypatch.setattr("reachy_bridge.robot.asyncio.sleep", no_wait)
+    robot = Robot(
+        Settings(_env_file=None), FakeSpeech(),
+        httpx.AsyncClient(base_url="http://robot", transport=httpx.MockTransport(handle)),
+    )
+    await robot.perform(Alert(event_id="voice-1", severity="healthy", summary="Hi",
+                              source=source, gesture=True))
+    paths = [req.url.path for req in calls]
+    assert paths.index("/api/media/play_sound") < paths.index("/api/move/goto")
+    poses = [json.loads(req.content) for req in calls if req.url.path == "/api/move/goto"]
+    assert poses[0]["head_pose"]["pitch"] == pytest.approx(math.radians(-4))
+    assert poses[-1]["head_pose"] == {"roll": 0, "pitch": 0, "yaw": 0}
+    await robot.close()
+
+
+@pytest.mark.parametrize("severity,expected_roll", [("healthy", -4), ("critical", 7)])
+async def test_telemetry_uses_small_status_pose(monkeypatch, severity, expected_roll):
+    import json
+
+    calls = []
+
+    def handle(req):
+        calls.append(req)
+        return daemon_request(req)
+
+    async def no_wait(_):
+        pass
+
+    monkeypatch.setattr("reachy_bridge.robot.asyncio.sleep", no_wait)
+    robot = Robot(
+        Settings(_env_file=None), FakeSpeech(),
+        httpx.AsyncClient(base_url="http://robot", transport=httpx.MockTransport(handle)),
+    )
+    result = await robot.perform(Alert(event_id="telemetry-1", severity=severity,
+                                       summary="Cluster status", source="reachy-telemetry/kubernetes",
+                                       gesture=True))
+    poses = [json.loads(req.content) for req in calls if req.url.path == "/api/move/goto"]
+    assert result["gesture_performed"] is True
+    assert poses[0]["head_pose"]["roll"] == pytest.approx(math.radians(expected_roll))
+    assert poses[-1]["head_pose"] == {"roll": 0, "pitch": 0, "yaw": 0}
+    await robot.close()
+
+
+async def test_voice_start_uses_cached_greeting_without_tts(monkeypatch, tmp_path):
+    class NoSpeech(FakeSpeech):
+        async def render(self, text):
+            raise AssertionError("Greeting should use cached audio")
+
+    async def no_wait(_):
+        pass
+
+    monkeypatch.setattr("reachy_bridge.robot.asyncio.sleep", no_wait)
+    greeting = tmp_path / "greeting.wav"
+    greeting.write_bytes(wav_bytes())
+    calls = []
+
+    def handle(req):
+        calls.append(req.url.path)
+        return daemon_request(req)
+
+    robot = Robot(
+        Settings(_env_file=None, voice_start_audio_file=greeting), NoSpeech(),
+        httpx.AsyncClient(base_url="http://robot", transport=httpx.MockTransport(handle)),
+    )
+    result = await robot.perform(Alert(event_id="start-1", severity="healthy",
+                                       summary="Hi! I'm listening.", source="reachy-voice-start",
+                                       gesture=True))
+    assert result["gesture_performed"] is True
+    assert "/api/media/play_sound" in calls
+    await robot.close()
+
+
 async def test_unready_robot_never_receives_mutations():
     calls = []
 

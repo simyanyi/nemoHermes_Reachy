@@ -10,6 +10,7 @@ reachy-bridge = "reachy_bridge.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8,<9", "pytest-asyncio>=0.24,<2", "ruff>=0.9,<1"]
+voice = ["reachy-mini==1.9.0", "faster-whisper>=1.2,<2", "av>=12,<17"]
 
 [build-system]
 requires = ["hatchling"]

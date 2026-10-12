@@ -11,7 +11,7 @@ import torch
 from kokoro import KPipeline
 
 logging.basicConfig(level=logging.INFO)
-torch.set_num_threads(2)
+torch.set_num_threads(6)
 # The cached image has Kokoro's lexicon and voices but no neural OOV fallback
 # model or phonemizer package. Unknown words are skipped rather than downloaded.
 pipeline = KPipeline(lang_code="a", device="cpu", repo_id="hexgrad/Kokoro-82M",

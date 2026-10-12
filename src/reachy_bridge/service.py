@@ -11,6 +11,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import Settings
 from .models import Alert, Event, now
+from .monitor import DockerSource, KubernetesSource, load_monitor_config
 from .robot import Robot
 from .tts import Speech
 
@@ -27,6 +28,7 @@ class Engine:
         self.active = None
         self.stopping = False
         self.stop_lock = asyncio.Lock()
+        self.voice_active = False
 
     def submit(self, alert):
         if self.stopping:
@@ -53,6 +55,10 @@ class Engine:
         event = Event(alert=alert, simulated=self.settings.dry_run)
         self.events[alert.event_id] = event
         self.queue.put_nowait((event, monotonic()))
+        if alert.source == "reachy-voice-start":
+            self.voice_active = True
+        elif alert.source == "reachy-voice-stop":
+            self.voice_active = False
         return event
 
     async def work(self):
@@ -116,6 +122,7 @@ def create_app(settings: Settings | None = None, robot=None):
     token = settings.token()  # Fail closed at startup; never silently run without auth.
     robot = robot or Robot(settings, Speech(settings))
     engine = Engine(settings, robot)
+    telemetry = DockerSource()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -166,12 +173,46 @@ def create_app(settings: Settings | None = None, robot=None):
     async def health():
         return {"service": "reachy-bridge", "ok": True, "simulated": settings.dry_run}
 
+    @app.get("/v1/voice", dependencies=[Depends(authorize)])
+    async def voice():
+        return {"active": engine.voice_active,
+                "busy": engine.active is not None or not engine.queue.empty()}
+
     @app.get("/v1/status", dependencies=[Depends(authorize)])
     async def status():
+        try:
+            current = await asyncio.to_thread(telemetry.snapshot)
+            docker = {"checked_at": now(), "containers": telemetry.last_inventory,
+                      "findings": [item.detail for item in current]}
+        except (OSError, RuntimeError, ValueError) as exc:
+            docker = {"checked_at": now(), "error": f"Docker telemetry unavailable: {type(exc).__name__}"}
+        cluster = None
+        try:
+            if settings.telemetry_config_file:
+                monitor_config = load_monitor_config(settings.telemetry_config_file)
+                kubernetes = (KubernetesSource(
+                    monitor_config.kubeconfig, monitor_config.kubectl,
+                    namespace=monitor_config.namespace, deployment=monitor_config.deployment,
+                ) if monitor_config.source == "kubernetes" else None)
+            else:
+                kubernetes = (KubernetesSource(
+                    settings.kubeconfig, namespace=settings.telemetry_namespace,
+                    deployment=settings.telemetry_deployment,
+                ) if settings.kubeconfig else None)
+            if kubernetes:
+                cluster_findings = await asyncio.to_thread(kubernetes.snapshot)
+                cluster = {"checked_at": now(), "summary": kubernetes.status_summary,
+                           "findings": [item.detail for item in cluster_findings]}
+        except (OSError, RuntimeError, ValueError) as exc:
+            cluster = {"checked_at": now(),
+                       "error": f"Kubernetes telemetry unavailable: {type(exc).__name__}"}
         return {
             "robot": await robot.status(),
+            "telemetry": docker,
+            "kubernetes": cluster,
             "queued": engine.queue.qsize(),
             "active": next((key for key, e in engine.events.items() if e.state == "running"), None),
+            "voice": {"active": engine.voice_active},
             "stopping": engine.stopping,
         }
 

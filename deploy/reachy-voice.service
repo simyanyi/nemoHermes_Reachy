@@ -1,0 +1,18 @@
+[Unit]
+Description=Reachy local microphone to Hermes conversation
+After=nemohermes-lifecycle.service reachy-bridge.service
+Requires=nemohermes-lifecycle.service reachy-bridge.service
+PartOf=nemohermes-lifecycle.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/admin/Documents/nemoHermes_Reachy
+EnvironmentFile=/home/admin/Documents/nemoHermes_Reachy/.env
+Environment=NEMOCLAW_GATEWAY_PORT=8080
+Environment=GST_PLUGIN_PATH=/opt/gst-plugins-rs/lib/aarch64-linux-gnu
+ExecStart=/home/admin/Documents/nemoHermes_Reachy/.venv/bin/reachy-bridge voice --model-path /home/admin/Documents/nemoHermes_Reachy/.models/faster-whisper-base.en --wake-word "hey reachy"
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=nemohermes-lifecycle.service

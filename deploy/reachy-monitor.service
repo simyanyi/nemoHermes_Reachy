@@ -1,0 +1,16 @@
+[Unit]
+Description=Reachy 10-second k3s telemetry watchdog
+After=nemohermes-lifecycle.service reachy-bridge.service
+Requires=nemohermes-lifecycle.service reachy-bridge.service
+PartOf=nemohermes-lifecycle.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/admin/Documents/nemoHermes_Reachy
+EnvironmentFile=/home/admin/Documents/nemoHermes_Reachy/.env
+ExecStart=/home/admin/Documents/nemoHermes_Reachy/.venv/bin/reachy-bridge monitor --config /home/admin/Documents/reachy-telemetry.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=nemohermes-lifecycle.service
